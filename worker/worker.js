@@ -17,11 +17,13 @@ async function getToken(env) {
   if (token.value && Date.now() < token.expires - 60_000) return token.value;
   const endpoint = `${BASE}/oauth/client_credential/accesstoken?grant_type=client_credentials`;
   // console.log(endpoint);
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(`${env.NSW_API_KEY}:${env.NSW_API_SECRET}`);
   const r = await fetch(endpoint, {
     method: "GET",
     headers: {
       authorization:
-        "Basic " + Buffer.from(`${env.NSW_API_KEY}:${env.NSW_API_SECRET}`).toString("base64"),
+        "Basic " + bytes.toBase64(),
     },
   });
   if (!r.ok) {
