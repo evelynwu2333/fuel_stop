@@ -473,8 +473,7 @@
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js"></script>
     <script>
       "use strict";
-      /* ---------- config: edit these two ---------- */
-      // Public Mapbox token (pk.…). It ships to the browser by design, so restrict it to this site's URL in the Mapbox dashboard.
+      /* ---------- config ---------- */
       const MAPBOX_TOKEN = "pk.eyJ1IjoiZXZlbHludy1wZXJzb25hbCIsImEiOiJjbXc2N2cyMGowMDRhMnlwcGU4NXJ5NXdpIn0.C50qk7FEn27zP6L-ArLx_A";
       // Base URL of the deployed Cloudflare Worker that proxies the NSW Fuel API.
       const API_BASE = "https://fuel_stop.fuelstop.workers.dev";
@@ -492,7 +491,7 @@
       const PROFILE = "driving"; // Mapbox routing profile ('driving-traffic' adds live traffic but Matrix then allows only 10 coordinates)
       const MAX_CANDIDATES = 23; // Mapbox Matrix accepts at most 25 coordinates per call: origin + destination + 23 stations
       const RECALC_KM = 1.5; // re-rank after moving this far from the last calculation
-      const DEFAULTS = { litres: 40, cons: 8, time: 10, offset: 3 };
+      const DEFAULTS = { litres: 40, cons: 8, time: 50, offset: 3 };
 
       /* ---------- state ---------- */
       const S = {

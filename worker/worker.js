@@ -1,10 +1,3 @@
-// Zero-dependency proxy for the NSW FuelCheck API (Node 18+).
-// The browser cannot call api.nsw.gov.au directly: the OAuth secret must not ship
-// to the client, and the API does not serve CORS headers for arbitrary origins.
-//
-//   NSW_API_KEY=... NSW_API_SECRET=... MAPBOX_URL=http://localhost:8002 node server.js
-//
-
 const BASE = "https://api.onegov.nsw.gov.au";
 const FUELS = new Set([
   "E10",
