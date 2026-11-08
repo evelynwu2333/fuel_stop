@@ -246,6 +246,9 @@
       .card.best.sel {
         border-color: var(--best);
       }
+      .card.est .meta b {
+        opacity: 0.7;
+      }
       .card h3 {
         margin: 0;
         font: 700 20px/1.1 var(--font);
@@ -496,9 +499,8 @@
     <script>
       "use strict";
       /* ---------- config ---------- */
-      // Base URL of the deployed Cloudflare Worker that proxies the NSW Fuel API.
-      // const API_BASE = "https://fuel_stop.fuelstop.workers.dev";
-      const API_BASE = "http://localhost:8787";
+      const API_BASE = "https://fuel_stop.fuelstop.workers.dev";
+      // const API_BASE = "http://localhost:8787";
 
       /* ---------- constants ---------- */
       const FUELS = [
@@ -535,7 +537,8 @@
         // brands: new Set(JSON.parse(localStorage.getItem("brands") || "[]")),
         brands: new Set(),
         prices: {}, // fuel -> {at, list}
-        suggestions: [],
+        inflight: {}, // fuel -> pending price request
+        geoError: null,
         run: 0,
       };
       const $ = (id) => document.getElementById(id);
@@ -558,6 +561,15 @@
       window.addEventListener("unhandledrejection", (e) =>
         dbg("REJECTED", String(e.reason?.message || e.reason)),
       );
+      function lapTimer() {
+        // per-stage timings in the ?debug=1 log
+        let t = performance.now();
+        return (label) => {
+          const n = performance.now();
+          dbg(label, Math.round(n - t) + "ms");
+          t = n;
+        };
+      }
       const esc = (s) =>
         String(s ?? "").replace(
           /[&<>"']/g,
@@ -657,59 +669,6 @@
         if (S.pos) updateMe(); // anything produced before the map existed
         if (S.ranked.length) render(true);
       }
-      // let MAPBOX_TOKEN;
-
-      // fetchJSON(`${API_BASE}/api/config`)
-      //   .then((data) => {
-      //     MAPBOX_TOKEN = data.mapboxToken;
-      //     mapboxgl.accessToken = MAPBOX_TOKEN;
-      //     const bounds = [
-      //       [113.3389, -43.6346],
-      //       [153.5695, -10.6682],
-      //     ];
-      //     const map = new mapboxgl.Map({
-      //       container: "map",
-      //       style: "mapbox://styles/mapbox/dark-v11",
-      //       center: [151.21, -33.87],
-      //       zoom: 10,
-      //       maxBounds: bounds,
-      //       attributionControl: true,
-      //     });
-      //     const mapLoaded = new Promise((resolve) =>
-      //       map.on("load", () => {
-      //         map.addSource("route", {
-      //           type: "geojson",
-      //           data: { type: "FeatureCollection", features: [] },
-      //         });
-      //         map.addLayer({
-      //           id: "route-casing",
-      //           type: "line",
-      //           source: "route",
-      //           layout: { "line-cap": "round", "line-join": "round" },
-      //           paint: { "line-color": "#0b2a4a", "line-width": 10 },
-      //         });
-      //         map.addLayer({
-      //           id: "route-line",
-      //           type: "line",
-      //           source: "route",
-      //           layout: { "line-cap": "round", "line-join": "round" },
-      //           paint: { "line-color": "#4da3ff", "line-width": 6 },
-      //         });
-      //         resolve();
-      //       }),
-      //     );
-      //     let meMarker = null,
-      //       destMarker = null,
-      //       markers = [];
-      //     const el = (cls, html = "") => {
-      //       const d = document.createElement("div");
-      //       d.className = cls;
-      //       d.innerHTML = html;
-      //       return d;
-      //     };
-      //   })
-      //   // if (!MAPBOX_TOKEN) throw new Error('Worker returned no Mapbox token');
-      // .catch ((e) => { status(e.message, true); throw e; })
 
       /* ---------- tabs ---------- */
       FUELS.forEach(([code, label]) => {
@@ -778,18 +737,26 @@
         return 2 * R * Math.asin(Math.sqrt(h));
       }
 
-      async function getPrices(fuel) {
-        if (S.prices[fuel] && Date.now() - S.prices[fuel].at < 5 * 60 * 1000)
-          return S.prices[fuel].list;
-        const raw = await fetchJSON(
+      function getPrices(fuel) {
+        const c = S.prices[fuel];
+        if (c && Date.now() - c.at < 5 * 60 * 1000)
+          return Promise.resolve(c.list);
+        if (S.inflight[fuel]) return S.inflight[fuel]; // share one request between callers
+        S.inflight[fuel] = fetchJSON(
           `${API_BASE}/api/prices?fuel=${encodeURIComponent(fuel)}`,
-        );
-        const list = raw.map((s) => ({ ...s, brand: s.brand || "Other" }));
-        S.prices[fuel] = { at: Date.now(), list };
-        return list;
+        )
+          .then((raw) => {
+            const list = raw.map((x) => ({ ...x, brand: x.brand || "Other" }));
+            S.prices[fuel] = { at: Date.now(), list };
+            return list;
+          })
+          .finally(() => {
+            delete S.inflight[fuel];
+          });
+        return S.inflight[fuel];
       }
-      const ll = (p) => `${p.lon},${p.lat}`; // Mapbox wants lon,lat
 
+      const ll = (p) => `${p.lon},${p.lat}`; // Mapbox wants lon,lat
       async function getRoute(o, d) {
         const j = await fetchJSON(
           `https://api.mapbox.com/directions/v5/mapbox/${PROFILE}/${ll(o)};${ll(d)}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`,
@@ -844,6 +811,7 @@
 
       /* ---------- ranking ---------- */
       // Estimated dollars: the fill itself + fuel burned on the detour + time on the detour.
+      const byTotal = (a, b) => a.total - b.total;
       function score(s) {
         const { litres, cons, time } = S.settings;
         const perL = s.price / 100;
@@ -864,6 +832,7 @@
           return;
         }
         const run = ++S.run;
+        const lap = lapTimer();
         dbg("recalc", { pos: S.pos, dest: S.dest, fuel: S.fuel });
         status("Finding stations on your route…");
         try {
@@ -872,11 +841,15 @@
             getPrices(S.fuel),
           ]);
           if (run !== S.run) return;
+          lap("route + prices");
           S.route = route;
           S.lastCalcPos = { ...S.pos };
 
           const proj = makeProjector(S.pos.lat);
-          const path = route.coords.map(proj);
+          const step = Math.max(1, Math.floor(route.coords.length / 1500));
+          const path = route.coords
+            .filter((_, i) => i % step === 0 || i === route.coords.length - 1)
+            .map(proj);
           const maxOff = S.settings.offset;
           let minLon = Infinity,
             maxLon = -Infinity,
@@ -899,7 +872,6 @@
             km: +route.km.toFixed(1),
             prices: prices.length,
           });
-
           const near = [];
           for (const s of prices) {
             if (
@@ -915,6 +887,7 @@
           near.sort((a, b) => a.offKm - b.offKm);
           S.near = near;
           dbg("near route", near.length);
+          lap("corridor filter");
           drawRoute(route);
           await rank(run, true);
         } catch (e) {
@@ -942,14 +915,36 @@
             );
             return;
           }
-          status("Calculating detours…");
-          const withDetour = await getDetours(S.pos, S.dest, candidates);
-          if (run !== S.run) return;
-          S.ranked = withDetour.map(score).sort((a, b) => a.total - b.total);
-          dbg("ranked", S.ranked.length);
-          S.sel = 0;
+          const lap = lapTimer();
+          // Pass 1 (instant): price plus a straight-line detour estimate, so cards appear as soon as the corridor filter is done.
+          S.ranked = candidates
+            .map((c) =>
+              score({
+                ...c,
+                extraKm: 2 * c.offKm,
+                extraMin: 3 * c.offKm,
+                estimated: true,
+              }),
+            )
+            .sort(byTotal);
           status("");
           render(fit);
+          lap("estimate render");
+          // Pass 2: exact detours from Mapbox Matrix replace the estimates.
+          let exact;
+          try {
+            exact = await getDetours(S.pos, S.dest, candidates);
+          } catch (e) {
+            if (run === S.run)
+              status(`Detours are estimates only (${e.message})`, true);
+            return;
+          }
+          if (run !== S.run) return;
+          lap("matrix");
+          const keep = S.ranked[S.sel]?.id; // keep the card the user is looking at
+          S.ranked = exact.map(score).sort(byTotal);
+          dbg("ranked", S.ranked.length);
+          render(false, keep);
         } catch (e) {
           if (run !== S.run) return;
           console.error(e);
@@ -1009,54 +1004,40 @@
           S.dest.lat,
         ]);
       }
-      function render(fit = false) {
-        markers.forEach((m) => m.remove());
-        markers = [];
-        const rail = $("cards");
-        rail.innerHTML = "";
+      function render(fit = false, keepId = null) {
+        markers.forEach((m) => m.remove()); markers = [];
+        const rail = $('cards'); rail.innerHTML = '';
         S.ranked.forEach((s, i) => {
-          const pin = el(
-            "pin" + (i === 0 ? " best" : ""),
-            `<span>${s.price.toFixed(1)}</span>`,
-          );
+          const pin = el('pin' + (i === 0 ? ' best' : ''), `<span>${s.price.toFixed(1)}</span>`);
           pin.style.zIndex = i === 0 ? 2 : 1;
-          pin.style.cursor = "pointer";
-          pin.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            focusCard(i);
-          });
-          markers.push(
-            new mapboxgl.Marker({ element: pin, anchor: "bottom" })
-              .setLngLat([s.lon, s.lat])
-              .addTo(map),
-          );
-
-          const c = document.createElement("article");
-          c.className = "card" + (i === 0 ? " best" : "");
-          c.dataset.i = i;
+          pin.style.cursor = 'pointer';
+          pin.addEventListener('click', (ev) => { ev.stopPropagation(); focusCard(i); });
+          const mk = addMarker({ element: pin, anchor: 'bottom' }, [s.lon, s.lat]);
+          if (mk) markers.push(mk);
+      
+          const c = document.createElement('article');
+          c.className = 'card' + (i === 0 ? ' best' : '') + (s.estimated ? ' est' : ''); c.dataset.i = i;
+          const ap = s.estimated ? '≈' : '';
           c.innerHTML = `
-        <h3>${i === 0 ? '<span class="badge">Best</span>' : ""}${esc(s.brand || s.name)}</h3>
-        <div class="addr">${esc(s.name !== s.brand ? s.name + " · " : "")}${esc(s.address)}</div>
-        <div class="price">${s.price.toFixed(1)}<small>¢/L · ${esc(fuelLabel())}</small></div>
-        <div class="meta"><span>Detour <b>+${s.extraKm.toFixed(1)} km</b></span><span><b>+${Math.max(1, Math.round(s.extraMin))} min</b></span><span>Total cost <b>$${s.total.toFixed(0)}</b></span></div>
-        <button class="go" data-i="${i}">Directions in Waze</button>`;
+            <h3>${i === 0 ? '<span class="badge">Best</span>' : ''}${esc(s.brand || s.name)}</h3>
+            <div class="addr">${esc(s.name !== s.brand ? s.name + ' · ' : '')}${esc(s.address)}</div>
+            <div class="price">${s.price.toFixed(1)}<small>¢/L · ${esc(fuelLabel())}</small></div>
+            <div class="meta"><span>Detour <b>${ap}+${s.extraKm.toFixed(1)} km</b></span><span><b>${ap}+${Math.max(1, Math.round(s.extraMin))} min</b></span><span>Fill <b>${ap}$${s.total.toFixed(0)}</b></span></div>
+            <button class="go" data-i="${i}">Directions in Waze</button>`;
           rail.appendChild(c);
         });
         rail.onscroll = onRailScroll;
-        rail
-          .querySelectorAll(".go")
-          .forEach((b) => (b.onclick = () => goWaze(S.ranked[+b.dataset.i])));
-        rail.scrollLeft = 0;
-        setSelected(0, true);
-        if (fit && S.route) {
+        rail.querySelectorAll('.go').forEach((b) => b.onclick = () => goWaze(S.ranked[+b.dataset.i]));
+        const k = keepId ? S.ranked.findIndex((x) => x.id === keepId) : 0;
+        const idx = Math.max(0, k);
+        if (idx > 0) rail.querySelector(`.card[data-i="${idx}"]`).scrollIntoView({ inline: 'center', block: 'nearest' });
+        else rail.scrollLeft = 0;
+        setSelected(idx, true);
+        if (fit && S.route && map) {
           const bounds = new mapboxgl.LngLatBounds();
           S.route.coords.forEach((c) => bounds.extend(c));
           S.ranked.forEach((s) => bounds.extend([s.lon, s.lat]));
-          map.fitBounds(bounds, {
-            padding: { top: 50, bottom: 40, left: 30, right: 30 },
-            maxZoom: 15,
-            duration: 600,
-          });
+          map.fitBounds(bounds, { padding: { top: 50, bottom: 40, left: 30, right: 30 }, maxZoom: 15, duration: 600 });
         }
       }
       function setSelected(i, silent = false) {
