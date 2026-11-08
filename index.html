@@ -1,0 +1,1140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Fuel stop</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.css"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0e151d;
+        --panel: #172230;
+        --panel-2: #1f2f41;
+        --line: #2c4057;
+        --text: #eef3f8;
+        --muted: #93a6ba;
+        --route: #4da3ff;
+        --best: #ffb703;
+        --best-ink: #1a1200;
+        --selected: #eef3f8;
+        --danger: #ff6b6b;
+        --font: "Barlow Semi Condensed", system-ui, sans-serif;
+        font-family: var(--font);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* top: fuel tabs, brand chips, destination */
+      header {
+        padding: env(safe-area-inset-top, 0) 0 0;
+        background: var(--bg);
+        z-index: 10;
+      }
+      .tabs {
+        display: flex;
+        gap: 6px;
+        padding: 8px 10px;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .tabs::-webkit-scrollbar {
+        display: none;
+      }
+      .tab {
+        flex: 0 0 auto;
+        min-width: 56px;
+        padding: 9px 14px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel);
+        color: var(--muted);
+        font: 600 18px/1 var(--font);
+        cursor: pointer;
+      }
+      .tab[aria-selected="true"] {
+        background: var(--best);
+        border-color: var(--best);
+        color: var(--best-ink);
+      }
+      .brands {
+        display: flex;
+        gap: 6px;
+        padding: 0 10px 8px;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .brands::-webkit-scrollbar {
+        display: none;
+      }
+      .chip {
+        flex: 0 0 auto;
+        padding: 7px 13px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: transparent;
+        color: var(--muted);
+        font: 600 16px/1 var(--font);
+        cursor: pointer;
+      }
+      .chip[aria-pressed="true"] {
+        background: var(--route);
+        border-color: var(--route);
+        color: #04111f;
+      }
+      .dest {
+        display: flex;
+        gap: 8px;
+        padding: 0 10px 8px;
+        position: relative;
+      }
+      .dest input {
+        flex: 1;
+        min-width: 0;
+        padding: 11px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        font: 500 17px var(--font);
+      }
+      .icon-btn {
+        width: 46px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        font-size: 20px;
+        cursor: pointer;
+      }
+      .suggest {
+        position: absolute;
+        left: 10px;
+        right: 66px;
+        top: 50px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+        z-index: 20;
+      }
+      .suggest button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 11px 12px;
+        background: none;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        color: var(--text);
+        font: 500 16px var(--font);
+        cursor: pointer;
+      }
+      .suggest button:last-child {
+        border-bottom: 0;
+      }
+
+      /* map (Mapbox GL). The rail sits below the map rather than over it so Mapbox's logo and attribution stay visible. */
+      .stage {
+        flex: 1;
+        min-height: 0;
+        position: relative;
+      }
+      #map {
+        position: absolute;
+        inset: 0;
+        background: var(--bg);
+      }
+      .pin span {
+        display: block;
+        padding: 4px 8px;
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--text);
+        border: 2px solid var(--line);
+        font: 700 15px/1 var(--font);
+        white-space: nowrap;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+        transition: transform 0.15s;
+      }
+      .pin.best span {
+        background: var(--best);
+        color: var(--best-ink);
+        border-color: var(--best);
+        font-size: 17px;
+      }
+      .pin.sel span {
+        outline: 3px solid #fff;
+        outline-offset: 1px;
+        transform: scale(1.18);
+      }
+      .me {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--route);
+        border: 3px solid #fff;
+        box-shadow: 0 0 0 6px rgba(77, 163, 255, 0.3);
+      }
+      .dest-dot {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--danger);
+        border: 3px solid #fff;
+      }
+
+      /* bottom cards */
+      .rail {
+        background: var(--bg);
+        padding-bottom: env(safe-area-inset-bottom, 0);
+        border-top: 1px solid var(--line);
+      }
+      .cards {
+        display: flex;
+        gap: 10px;
+        overflow-x: auto;
+        scroll-snap-type: x mandatory;
+        padding: 10px calc(50% - min(39vw, 170px)) 10px;
+        scrollbar-width: none;
+      }
+      .cards::-webkit-scrollbar {
+        display: none;
+      }
+      .card {
+        flex: 0 0 min(78vw, 340px);
+        scroll-snap-align: center;
+        background: var(--panel);
+        border: 2px solid var(--line);
+        border-radius: 14px;
+        padding: 12px 14px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 4px 10px;
+      }
+      .card.best {
+        border-color: var(--best);
+      }
+      .card.sel {
+        background: var(--panel-2);
+        border-color: var(--selected);
+      }
+      .card.best.sel {
+        border-color: var(--best);
+      }
+      .card h3 {
+        margin: 0;
+        font: 700 20px/1.1 var(--font);
+      }
+      .card .addr {
+        grid-column: 1;
+        color: var(--muted);
+        font-size: 15px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .price {
+        grid-row: 1 / span 2;
+        grid-column: 2;
+        text-align: right;
+        font: 700 34px/1 var(--font);
+      }
+      .price small {
+        display: block;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--muted);
+      }
+      .badge {
+        display: inline-block;
+        margin-right: 6px;
+        padding: 2px 7px;
+        border-radius: 6px;
+        background: var(--best);
+        color: var(--best-ink);
+        font-size: 13px;
+        font-weight: 700;
+        vertical-align: 3px;
+      }
+      .meta {
+        grid-column: 1 / -1;
+        display: flex;
+        gap: 16px;
+        color: var(--muted);
+        font-size: 16px;
+        margin-top: 4px;
+      }
+      .meta b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .go {
+        grid-column: 1 / -1;
+        margin-top: 8px;
+        padding: 12px;
+        border: 0;
+        border-radius: 10px;
+        background: var(--route);
+        color: #04111f;
+        font: 700 18px var(--font);
+        cursor: pointer;
+      }
+      .card.best .go {
+        background: var(--best);
+        color: var(--best-ink);
+      }
+
+      .status {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 5;
+        max-width: 86vw;
+        padding: 14px 18px;
+        border-radius: 12px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        font-size: 18px;
+        text-align: center;
+      }
+      .status.err {
+        border-color: var(--danger);
+      }
+      .status[hidden],
+      .resume[hidden] {
+        display: none;
+      }
+      .resume {
+        position: absolute;
+        left: 10px;
+        right: 10px;
+        top: 10px;
+        z-index: 5;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: var(--route);
+        color: #04111f;
+        font-weight: 600;
+        font-size: 17px;
+      }
+      .resume button {
+        margin-left: auto;
+        padding: 8px 12px;
+        border: 0;
+        border-radius: 8px;
+        background: #04111f;
+        color: #fff;
+        font: 600 16px var(--font);
+        cursor: pointer;
+      }
+
+      dialog {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+        color: var(--text);
+        width: min(92vw, 380px);
+      }
+      dialog::backdrop {
+        background: rgba(0, 0, 0, 0.6);
+      }
+      dialog label {
+        display: block;
+        margin: 12px 0 4px;
+        color: var(--muted);
+        font-size: 15px;
+      }
+      dialog input {
+        width: 100%;
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        color: var(--text);
+        font: 500 18px var(--font);
+      }
+      dialog p {
+        color: var(--muted);
+        font-size: 14px;
+        margin: 12px 0 0;
+      }
+      dialog .row {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 14px;
+      }
+      dialog .row button {
+        padding: 10px 18px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--best);
+        color: var(--best-ink);
+        font: 700 17px var(--font);
+        cursor: pointer;
+      }
+      :focus-visible {
+        outline: 3px solid #fff;
+        outline-offset: 2px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          scroll-behavior: auto !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="tabs" role="tablist" id="tabs"></div>
+      <div
+        class="brands"
+        id="brands"
+        role="group"
+        aria-label="Preferred brands"
+      ></div>
+      <div class="dest">
+        <input
+          id="destInput"
+          type="search"
+          placeholder="Destination, or paste a Waze link"
+          enterkeyhint="search"
+          autocomplete="off"
+        />
+        <button class="icon-btn" id="settingsBtn" aria-label="Cost settings">
+          ⚙
+        </button>
+        <div class="suggest" id="suggest" hidden></div>
+      </div>
+    </header>
+
+    <main class="stage">
+      <div id="map"></div>
+      <div class="status" id="status" hidden></div>
+      <div class="resume" id="resume" hidden>
+        <span id="resumeText"></span><button id="resumeBtn">Navigate</button>
+      </div>
+    </main>
+
+    <div class="rail">
+      <div
+        class="cards"
+        id="cards"
+        aria-label="Petrol stations ranked by cost"
+      ></div>
+    </div>
+
+    <dialog id="settings">
+      <strong style="font-size: 20px">Ranking costs</strong>
+      <label for="sLitres">Litres per fill</label>
+      <input id="sLitres" type="number" min="1" step="1" />
+      <label for="sCons">Fuel use (L/100 km)</label>
+      <input id="sCons" type="number" min="1" step="0.1" />
+      <label for="sTime">Value of your time ($/hour)</label>
+      <input id="sTime" type="number" min="0" step="1" />
+      <label for="sOffset">Max distance from route (km)</label>
+      <input id="sOffset" type="number" min="0.5" step="0.5" />
+      <p>
+        Ranking is the estimated dollar cost of this fill, plus the fuel and
+        time spent on the detour.
+      </p>
+      <form method="dialog" class="row"><button>Done</button></form>
+    </dialog>
+
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js"></script>
+    <script>
+      "use strict";
+      /* ---------- config: edit these two ---------- */
+      // Public Mapbox token (pk.…). It ships to the browser by design, so restrict it to this site's URL in the Mapbox dashboard.
+      const MAPBOX_TOKEN = "pk.eyJ1IjoiZXZlbHludy1wZXJzb25hbCIsImEiOiJjbXc2N2cyMGowMDRhMnlwcGU4NXJ5NXdpIn0.C50qk7FEn27zP6L-ArLx_A";
+      // Base URL of the deployed Cloudflare Worker that proxies the NSW Fuel API.
+      const API_BASE = "https://fuel_stop.fuelstop.workers.dev";
+
+      /* ---------- constants ---------- */
+      const FUELS = [
+        ["U91", "91"],
+        ["E10", "E10"],
+        ["P95", "95"],
+        ["P98", "98"],
+        ["DL", "Diesel"],
+        ["PDL", "Prem. diesel"],
+        ["LPG", "LPG"],
+      ];
+      const PROFILE = "driving"; // Mapbox routing profile ('driving-traffic' adds live traffic but Matrix then allows only 10 coordinates)
+      const MAX_CANDIDATES = 23; // Mapbox Matrix accepts at most 25 coordinates per call: origin + destination + 23 stations
+      const RECALC_KM = 1.5; // re-rank after moving this far from the last calculation
+      const DEFAULTS = { litres: 40, cons: 8, time: 10, offset: 3 };
+
+      /* ---------- state ---------- */
+      const S = {
+        fuel: localStorage.getItem("fuel") || "U91",
+        settings: {
+          ...DEFAULTS,
+          ...JSON.parse(localStorage.getItem("settings") || "{}"),
+        },
+        pos: null,
+        lastCalcPos: null,
+        dest: JSON.parse(localStorage.getItem("dest") || "null"),
+        route: null, // {coords:[[lon,lat]], km, min}
+        near: [],
+        ranked: [],
+        sel: -1,
+        brands: new Set(JSON.parse(localStorage.getItem("brands") || "[]")),
+        prices: {}, // fuel -> {at, list}
+        suggestions: [],
+        run: 0,
+      };
+      const $ = (id) => document.getElementById(id);
+      const esc = (s) =>
+        String(s ?? "").replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+
+      /* ---------- map (Mapbox GL JS) ---------- */
+      mapboxgl.accessToken = MAPBOX_TOKEN;
+      const map = new mapboxgl.Map({
+        container: "map",
+        style: "mapbox://styles/mapbox/dark-v11",
+        center: [151.21, -33.87],
+        zoom: 10,
+        attributionControl: true,
+      });
+      const mapLoaded = new Promise((resolve) =>
+        map.on("load", () => {
+          map.addSource("route", {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] },
+          });
+          map.addLayer({
+            id: "route-casing",
+            type: "line",
+            source: "route",
+            layout: { "line-cap": "round", "line-join": "round" },
+            paint: { "line-color": "#0b2a4a", "line-width": 10 },
+          });
+          map.addLayer({
+            id: "route-line",
+            type: "line",
+            source: "route",
+            layout: { "line-cap": "round", "line-join": "round" },
+            paint: { "line-color": "#4da3ff", "line-width": 6 },
+          });
+          resolve();
+        }),
+      );
+      let meMarker = null,
+        destMarker = null,
+        markers = [];
+      const el = (cls, html = "") => {
+        const d = document.createElement("div");
+        d.className = cls;
+        d.innerHTML = html;
+        return d;
+      };
+
+      /* ---------- tabs ---------- */
+      FUELS.forEach(([code, label]) => {
+        const b = document.createElement("button");
+        b.className = "tab";
+        b.role = "tab";
+        b.textContent = label;
+        b.dataset.code = code;
+        b.setAttribute("aria-selected", code === S.fuel);
+        b.onclick = () => selectFuel(code);
+        $("tabs").appendChild(b);
+      });
+      function selectFuel(code) {
+        S.fuel = code;
+        localStorage.setItem("fuel", code);
+        document
+          .querySelectorAll(".tab")
+          .forEach((t) =>
+            t.setAttribute("aria-selected", t.dataset.code === code),
+          );
+        recalc();
+      }
+
+      /* ---------- status ---------- */
+      function status(msg, err = false) {
+        const e = $("status");
+        if (!msg) {
+          e.hidden = true;
+          return;
+        }
+        e.textContent = msg;
+        e.className = "status" + (err ? " err" : "");
+        e.hidden = false;
+      }
+
+      /* ---------- geo helpers ---------- */
+      function makeProjector(lat0) {
+        const kx = 111.32 * Math.cos((lat0 * Math.PI) / 180),
+          ky = 110.574;
+        return ([lon, lat]) => [lon * kx, lat * ky];
+      }
+      function distPointToPath(p, path) {
+        // km, planar approximation (fine at city/regional scale)
+        let best = Infinity;
+        for (let i = 0; i < path.length - 1; i++) {
+          const [ax, ay] = path[i],
+            [bx, by] = path[i + 1];
+          const dx = bx - ax,
+            dy = by - ay,
+            l2 = dx * dx + dy * dy;
+          let t = l2 ? ((p[0] - ax) * dx + (p[1] - ay) * dy) / l2 : 0;
+          t = Math.max(0, Math.min(1, t));
+          const d = Math.hypot(p[0] - (ax + t * dx), p[1] - (ay + t * dy));
+          if (d < best) best = d;
+        }
+        return best;
+      }
+      function haversineKm(a, b) {
+        const R = 6371,
+          r = Math.PI / 180;
+        const dLat = (b.lat - a.lat) * r,
+          dLon = (b.lon - a.lon) * r;
+        const h =
+          Math.sin(dLat / 2) ** 2 +
+          Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLon / 2) ** 2;
+        return 2 * R * Math.asin(Math.sqrt(h));
+      }
+
+      /* ---------- data fetchers ---------- */
+      async function fetchJSON(url, opts) {
+        const r = await fetch(url, opts);
+        if (!r.ok) {
+          let detail = "";
+          try {
+            const j = await r.json();
+            detail = j.error || j.message || "";
+          } catch {}
+          throw new Error(
+            `${new URL(url, location.href).host}: HTTP ${r.status}${detail ? " – " + detail : ""}`,
+          );
+        }
+        return r.json();
+      }
+      async function getPrices(fuel) {
+        if (S.prices[fuel] && Date.now() - S.prices[fuel].at < 5 * 60 * 1000)
+          return S.prices[fuel].list;
+        const raw = await fetchJSON(
+          `${API_BASE}/api/prices?fuel=${encodeURIComponent(fuel)}`,
+        );
+        const list = raw.map((s) => ({ ...s, brand: s.brand || "Other" }));
+        S.prices[fuel] = { at: Date.now(), list };
+        return list;
+      }
+      const ll = (p) => `${p.lon},${p.lat}`; // Mapbox wants lon,lat
+
+      async function getRoute(o, d) {
+        const j = await fetchJSON(
+          `https://api.mapbox.com/directions/v5/mapbox/${PROFILE}/${ll(o)};${ll(d)}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`,
+        );
+        // Mapbox reports routing failures (e.g. NoRoute) as HTTP 200 with code != "Ok"
+        if (j.code !== "Ok" || !j.routes?.length)
+          throw new Error(j.message || "No route found");
+        const r = j.routes[0];
+        return {
+          coords: r.geometry.coordinates,
+          km: r.distance / 1000,
+          min: r.duration / 60,
+        };
+      }
+      // Two small Matrix calls instead of one (n+1)x(n+1): origin -> [dest, stations...] and stations -> dest.
+      // Billed per element, so this costs 2n+1 elements rather than (n+1)^2. Distances are metres, durations seconds,
+      // and unreachable pairs are null.
+      async function getDetours(o, d, stations) {
+        const n = stations.length;
+        const seq = (from, count) =>
+          Array.from({ length: count }, (_, i) => i + from).join(";");
+        const url = (coords, sources, dests) =>
+          `https://api.mapbox.com/directions-matrix/v1/mapbox/${PROFILE}/${coords.join(";")}?sources=${sources}&destinations=${dests}&annotations=distance,duration&access_token=${MAPBOX_TOKEN}`;
+        const [out, back] = await Promise.all([
+          fetchJSON(
+            url([ll(o), ll(d), ...stations.map(ll)], "0", seq(1, n + 1)),
+          ), // dests: [dest, ...stations]
+          fetchJSON(url([ll(d), ...stations.map(ll)], seq(1, n), "0")), // sources: stations, dest: [dest]
+        ]);
+        for (const j of [out, back])
+          if (j.code !== "Ok")
+            throw new Error(j.message || "Detour calculation failed");
+        const baseM = out.distances[0][0],
+          baseS = out.durations[0][0];
+        if (baseM == null || baseS == null)
+          throw new Error("Destination is not reachable from here");
+        return stations
+          .map((s, i) => {
+            const aM = out.distances[0][i + 1],
+              aS = out.durations[0][i + 1];
+            const bM = back.distances[i][0],
+              bS = back.durations[i][0];
+            if ([aM, aS, bM, bS].some((v) => v == null)) return null;
+            return {
+              ...s,
+              extraKm: Math.max(0, (aM + bM - baseM) / 1000),
+              extraMin: Math.max(0, (aS + bS - baseS) / 60),
+            };
+          })
+          .filter(Boolean);
+      }
+
+      /* ---------- ranking ---------- */
+      // Estimated dollars: the fill itself + fuel burned on the detour + time on the detour.
+      function score(s) {
+        const { litres, cons, time } = S.settings;
+        const perL = s.price / 100;
+        s.fillCost = litres * perL;
+        s.detourCost =
+          s.extraKm * (cons / 100) * perL + (s.extraMin / 60) * time;
+        s.total = s.fillCost + s.detourCost;
+        return s;
+      }
+
+      /* ---------- main pipeline ---------- */
+      // recalc(): route + price fetch + corridor filter (all brands).  rank(): brand filter + detours + scoring.
+      async function recalc() {
+        if (!S.pos || !S.dest) {
+          getPrices(S.fuel)
+            .then(renderBrands)
+            .catch(() => {});
+          return;
+        }
+        const run = ++S.run;
+        status("Finding stations on your route…");
+        try {
+          const [route, prices] = await Promise.all([
+            getRoute(S.pos, S.dest),
+            getPrices(S.fuel),
+          ]);
+          if (run !== S.run) return;
+          S.route = route;
+          S.lastCalcPos = { ...S.pos };
+
+          const proj = makeProjector(S.pos.lat);
+          const path = route.coords.map(proj);
+          const maxOff = S.settings.offset;
+          const lons = route.coords.map((c) => c[0]),
+            lats = route.coords.map((c) => c[1]);
+          const padLat = maxOff / 110.574,
+            padLon = maxOff / (111.32 * Math.cos((S.pos.lat * Math.PI) / 180));
+          const [minLon, maxLon, minLat, maxLat] = [
+            Math.min(...lons) - padLon,
+            Math.max(...lons) + padLon,
+            Math.min(...lats) - padLat,
+            Math.max(...lats) + padLat,
+          ];
+
+          const near = [];
+          for (const s of prices) {
+            if (
+              s.lon < minLon ||
+              s.lon > maxLon ||
+              s.lat < minLat ||
+              s.lat > maxLat
+            )
+              continue;
+            const off = distPointToPath(proj([s.lon, s.lat]), path);
+            if (off <= maxOff) near.push({ ...s, offKm: off });
+          }
+          near.sort((a, b) => a.offKm - b.offKm);
+          S.near = near;
+          await drawRoute(route);
+          await rank(run, true);
+        } catch (e) {
+          if (run !== S.run) return;
+          console.error(e);
+          status(e.message, true);
+        }
+      }
+      async function rank(run = ++S.run, fit = false) {
+        renderBrands();
+        try {
+          const pool = S.brands.size
+            ? S.near.filter((s) => S.brands.has(s.brand))
+            : S.near;
+          const candidates = pool.slice(0, MAX_CANDIDATES); // closest to the route first
+          if (!candidates.length) {
+            S.ranked = [];
+            render();
+            status(
+              S.brands.size
+                ? `No ${[...S.brands].join(" / ")} stations with ${fuelLabel()} within ${S.settings.offset} km of your route.`
+                : `No ${fuelLabel()} stations within ${S.settings.offset} km of your route.`,
+              true,
+            );
+            return;
+          }
+          status("Calculating detours…");
+          const withDetour = await getDetours(S.pos, S.dest, candidates);
+          if (run !== S.run) return;
+          S.ranked = withDetour.map(score).sort((a, b) => a.total - b.total);
+          S.sel = 0;
+          status("");
+          render(fit);
+        } catch (e) {
+          if (run !== S.run) return;
+          console.error(e);
+          status(e.message, true);
+        }
+      }
+      const fuelLabel = () => FUELS.find((f) => f[0] === S.fuel)[1];
+
+      /* ---------- brand filter ----------
+    Chips list the brands present along the current route (or in the whole price feed before a route exists).
+    Selected brands are always shown. No selection = any brand. */
+      function renderBrands() {
+        const src = S.near.length ? S.near : S.prices[S.fuel]?.list || [];
+        const counts = new Map();
+        for (const s of src)
+          counts.set(s.brand, (counts.get(s.brand) || 0) + 1);
+        for (const b of S.brands) if (!counts.has(b)) counts.set(b, 0);
+        const brands = [...counts]
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .map((x) => x[0]);
+        const box = $("brands");
+        box.innerHTML = "";
+        const mk = (label, pressed, fn) => {
+          const b = document.createElement("button");
+          b.className = "chip";
+          b.textContent = label;
+          b.setAttribute("aria-pressed", pressed);
+          b.onclick = fn;
+          box.appendChild(b);
+        };
+        mk("Any brand", S.brands.size === 0, () => toggleBrand(null));
+        brands.forEach((br) => mk(br, S.brands.has(br), () => toggleBrand(br)));
+      }
+      function toggleBrand(b) {
+        if (b === null) S.brands.clear();
+        else if (S.brands.has(b)) S.brands.delete(b);
+        else S.brands.add(b);
+        localStorage.setItem("brands", JSON.stringify([...S.brands]));
+        if (S.route) rank();
+        else renderBrands();
+      }
+
+      /* ---------- rendering ---------- */
+      async function drawRoute(route) {
+        await mapLoaded;
+        map
+          .getSource("route")
+          .setData({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: route.coords },
+          });
+        if (destMarker) destMarker.remove();
+        destMarker = new mapboxgl.Marker({ element: el("dest-dot") })
+          .setLngLat([S.dest.lon, S.dest.lat])
+          .addTo(map);
+      }
+      function render(fit = false) {
+        markers.forEach((m) => m.remove());
+        markers = [];
+        const rail = $("cards");
+        rail.innerHTML = "";
+        S.ranked.forEach((s, i) => {
+          const pin = el(
+            "pin" + (i === 0 ? " best" : ""),
+            `<span>${s.price.toFixed(1)}</span>`,
+          );
+          pin.style.zIndex = i === 0 ? 2 : 1;
+          pin.style.cursor = "pointer";
+          pin.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            focusCard(i);
+          });
+          markers.push(
+            new mapboxgl.Marker({ element: pin, anchor: "bottom" })
+              .setLngLat([s.lon, s.lat])
+              .addTo(map),
+          );
+
+          const c = document.createElement("article");
+          c.className = "card" + (i === 0 ? " best" : "");
+          c.dataset.i = i;
+          c.innerHTML = `
+        <h3>${i === 0 ? '<span class="badge">Best</span>' : ""}${esc(s.brand || s.name)}</h3>
+        <div class="addr">${esc(s.name !== s.brand ? s.name + " · " : "")}${esc(s.address)}</div>
+        <div class="price">${s.price.toFixed(1)}<small>¢/L · ${esc(fuelLabel())}</small></div>
+        <div class="meta"><span>Detour <b>+${s.extraKm.toFixed(1)} km</b></span><span><b>+${Math.max(1, Math.round(s.extraMin))} min</b></span><span>Total cost <b>$${s.total.toFixed(0)}</b></span></div>
+        <button class="go" data-i="${i}">Directions in Waze</button>`;
+          rail.appendChild(c);
+        });
+        rail.onscroll = onRailScroll;
+        rail
+          .querySelectorAll(".go")
+          .forEach((b) => (b.onclick = () => goWaze(S.ranked[+b.dataset.i])));
+        rail.scrollLeft = 0;
+        setSelected(0, true);
+        if (fit && S.route) {
+          const bounds = new mapboxgl.LngLatBounds();
+          S.route.coords.forEach((c) => bounds.extend(c));
+          S.ranked.forEach((s) => bounds.extend([s.lon, s.lat]));
+          map.fitBounds(bounds, {
+            padding: { top: 50, bottom: 40, left: 30, right: 30 },
+            maxZoom: 15,
+            duration: 600,
+          });
+        }
+      }
+      function setSelected(i, silent = false) {
+        if (i === S.sel && !silent) return;
+        S.sel = i;
+        markers.forEach((m, k) => {
+          const e = m.getElement();
+          e.classList.toggle("sel", k === i);
+          e.style.zIndex = k === i ? 3 : k === 0 ? 2 : 1;
+        });
+        document
+          .querySelectorAll(".card")
+          .forEach((c, k) => c.classList.toggle("sel", k === i));
+        if (!silent && S.ranked[i])
+          map.easeTo({
+            center: [S.ranked[i].lon, S.ranked[i].lat],
+            duration: 400,
+          });
+      }
+      let rafId = 0;
+      function onRailScroll() {
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => {
+          const rail = $("cards"),
+            mid = rail.getBoundingClientRect().left + rail.clientWidth / 2;
+          let best = 0,
+            bd = Infinity;
+          rail.querySelectorAll(".card").forEach((c, k) => {
+            const r = c.getBoundingClientRect(),
+              d = Math.abs(r.left + r.width / 2 - mid);
+            if (d < bd) {
+              bd = d;
+              best = k;
+            }
+          });
+          setSelected(best);
+        });
+      }
+      function focusCard(i) {
+        const c = document.querySelector(`.card[data-i="${i}"]`);
+        if (c)
+          c.scrollIntoView({
+            behavior: "smooth",
+            inline: "center",
+            block: "nearest",
+          });
+        setSelected(i);
+      }
+
+      /* ---------- Waze handoff ----------
+    Waze's public deep link only sets a single destination (no waypoint parameter), so the station
+    replaces the current destination. We remember the original so the user can resume afterwards. */
+      const wazeLink = (lat, lon) =>
+        `https://waze.com/ul?ll=${lat},${lon}&navigate=yes&zoom=17`;
+      function goWaze(s) {
+        if (S.dest) sessionStorage.setItem("resume", JSON.stringify(S.dest));
+        location.href = wazeLink(s.lat, s.lon);
+      }
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible") return;
+        const r = JSON.parse(sessionStorage.getItem("resume") || "null");
+        if (!r) return;
+        $("resumeText").textContent = `Back on route to ${r.name}?`;
+        $("resumeBtn").onclick = () => {
+          sessionStorage.removeItem("resume");
+          $("resume").hidden = true;
+          location.href = wazeLink(r.lat, r.lon);
+        };
+        $("resume").hidden = false;
+      });
+
+      /* ---------- destination search (Mapbox Geocoding v6) ----------
+    Waze exposes no API for reading the active route from a web page, so the destination is entered
+    here (search, or paste a waze.com/ul?ll=... share link) and the route is computed with Mapbox Directions. */
+      function parseWazeLink(text) {
+        const m = text.match(
+          /[?&]ll=(-?\d+(?:\.\d+)?)(?:,|%2C)(-?\d+(?:\.\d+)?)/i,
+        );
+        return m ? { lat: +m[1], lon: +m[2], name: "Waze destination" } : null;
+      }
+      async function geocode(q) {
+        const p = new URLSearchParams({
+          q,
+          country: "au",
+          limit: "5",
+          autocomplete: "true",
+          access_token: MAPBOX_TOKEN,
+        });
+        if (S.pos) p.set("proximity", `${S.pos.lon},${S.pos.lat}`);
+        const j = await fetchJSON(
+          `https://api.mapbox.com/search/geocode/v6/forward?${p}`,
+        );
+        return (j.features || []).map((f) => {
+          const pr = f.properties;
+          return {
+            lon: f.geometry.coordinates[0],
+            lat: f.geometry.coordinates[1],
+            name: pr.name_preferred || pr.name,
+            full:
+              pr.full_address ||
+              [pr.name, pr.place_formatted].filter(Boolean).join(", "),
+          };
+        });
+      }
+      function setDest(d) {
+        S.dest = { lat: d.lat, lon: d.lon, name: d.name };
+        localStorage.setItem("dest", JSON.stringify(S.dest));
+        $("destInput").value = d.name;
+        $("suggest").hidden = true;
+        S.suggestions = [];
+        recalc();
+      }
+      function showSuggestions(list) {
+        S.suggestions = list;
+        const box = $("suggest");
+        box.innerHTML = "";
+        list.forEach((r) => {
+          const b = document.createElement("button");
+          b.textContent = r.full;
+          b.onclick = () => setDest(r);
+          box.appendChild(b);
+        });
+        box.hidden = list.length === 0;
+      }
+      let searchTimer = 0,
+        searchSeq = 0;
+      $("destInput").addEventListener("input", (e) => {
+        clearTimeout(searchTimer);
+        const q = e.target.value.trim();
+        if (q.length < 3 || parseWazeLink(q)) {
+          $("suggest").hidden = true;
+          return;
+        }
+        searchTimer = setTimeout(async () => {
+          const seq = ++searchSeq;
+          try {
+            const res = await geocode(q);
+            if (seq === searchSeq) showSuggestions(res);
+          } catch (err) {
+            status(err.message, true);
+          }
+        }, 300);
+      });
+      $("destInput").addEventListener("keydown", async (e) => {
+        if (e.key !== "Enter") return;
+        const q = e.target.value.trim();
+        if (!q) return;
+        const w = parseWazeLink(q);
+        if (w) return setDest(w);
+        if (S.suggestions.length) return setDest(S.suggestions[0]);
+        try {
+          const res = await geocode(q);
+          if (!res.length)
+            return status("No match for that destination.", true);
+          setDest(res[0]);
+        } catch (err) {
+          status(err.message, true);
+        }
+      });
+      if (S.dest) $("destInput").value = S.dest.name;
+      getPrices(S.fuel)
+        .then(renderBrands)
+        .catch((e) => status(e.message, true));
+
+      /* ---------- settings ---------- */
+      const fields = {
+        litres: "sLitres",
+        cons: "sCons",
+        time: "sTime",
+        offset: "sOffset",
+      };
+      $("settingsBtn").onclick = () => {
+        for (const k in fields) $(fields[k]).value = S.settings[k];
+        $("settings").showModal();
+      };
+      $("settings").addEventListener("close", () => {
+        for (const k in fields) {
+          const v = parseFloat($(fields[k]).value);
+          if (isFinite(v) && v >= 0) S.settings[k] = v;
+        }
+        localStorage.setItem("settings", JSON.stringify(S.settings));
+        recalc();
+      });
+
+      /* ---------- location ---------- */
+      function updateMe() {
+        const lngLat = [S.pos.lon, S.pos.lat];
+        if (!meMarker)
+          meMarker = new mapboxgl.Marker({ element: el("me") })
+            .setLngLat(lngLat)
+            .addTo(map);
+        else meMarker.setLngLat(lngLat);
+      }
+      if (!("geolocation" in navigator))
+        status("This browser has no location support.", true);
+      else
+        navigator.geolocation.watchPosition(
+          (p) => {
+            const first = !S.pos;
+            S.pos = { lat: p.coords.latitude, lon: p.coords.longitude };
+            updateMe();
+            if (first) {
+              if (S.dest) recalc();
+              else {
+                map.jumpTo({ center: [S.pos.lon, S.pos.lat], zoom: 13 });
+                status("Search for a destination to find fuel on your route.");
+              }
+            } else if (
+              S.lastCalcPos &&
+              S.dest &&
+              haversineKm(S.pos, S.lastCalcPos) > RECALC_KM
+            )
+              recalc();
+          },
+          (e) =>
+            status(
+              e.code === 1
+                ? "Allow location access to find stations on your route."
+                : "Could not get your location.",
+              true,
+            ),
+          { enableHighAccuracy: true, maximumAge: 10_000 },
+        );
+    </script>
+  </body>
+</html>

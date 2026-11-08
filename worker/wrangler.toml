@@ -1,0 +1,7 @@
+name = "fuel_stop"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+# Comma-separated list of origins allowed to call the API from a browser.
+ALLOWED_ORIGINS = "https://evelynwu2333.github.io,http://localhost:8080"
