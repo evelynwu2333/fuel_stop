@@ -494,8 +494,8 @@
       const DEFAULTS = { litres: 40, cons: 8, time: 50, offset: 3 };
 
       /* ---------- state ---------- */
-      ['brands', 'dest'].forEach((k) => localStorage.removeItem(k));
-      sessionStorage.removeItem('resume');
+      ["brands", "dest"].forEach((k) => localStorage.removeItem(k));
+      sessionStorage.removeItem("resume");
       const S = {
         fuel: localStorage.getItem("fuel") || "U91",
         settings: {
@@ -517,6 +517,25 @@
         run: 0,
       };
       const $ = (id) => document.getElementById(id);
+
+      // Add ?debug=1 to the URL to show an on-screen log (handy on a phone, where there is no console).
+      const DEBUG = new URLSearchParams(location.search).has("debug");
+      const dbgBox = DEBUG
+        ? Object.assign(
+            document.body.appendChild(document.createElement("pre")),
+            { id: "dbg" },
+          )
+        : null;
+      function dbg(...a) {
+        if (!DEBUG) return;
+        const t = new Date().toISOString().slice(11, 19);
+        dbgBox.textContent += `${t} ${a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")}\n`;
+        dbgBox.scrollTop = dbgBox.scrollHeight;
+      }
+      window.addEventListener("error", (e) => dbg("ERROR", e.message));
+      window.addEventListener("unhandledrejection", (e) =>
+        dbg("REJECTED", String(e.reason?.message || e.reason)),
+      );
       const esc = (s) =>
         String(s ?? "").replace(
           /[&<>"']/g,
@@ -530,26 +549,58 @@
             })[c],
         );
 
+      /* ---------- data fetchers ---------- */
+      async function fetchJSON(url, opts) {
+        const r = await fetch(url, opts);
+        if (!r.ok) {
+          let detail = "";
+          try {
+            const j = await r.json();
+            detail = j.error || j.message || "";
+          } catch {}
+          throw new Error(
+            `${new URL(url, location.href).host}: HTTP ${r.status}${detail ? " – " + detail : ""}`,
+          );
+        }
+        return r.json();
+      }
+
       /* ---------- map (Mapbox GL JS) ---------- */
-      let MAPBOX_TOKEN;
-      try {
-        MAPBOX_TOKEN = (await fetchJSON(`${API_BASE}/api/config`)).mapboxToken;
-        if (!MAPBOX_TOKEN) throw new Error('Worker returned no Mapbox token');
-      } catch (e) { status(e.message, true); throw e; }
-      mapboxgl.accessToken = MAPBOX_TOKEN;
-      const bounds = [
-        [113.3389, -43.6346],
-        [153.5695, -10.6682],
-      ];
-      const map = new mapboxgl.Map({
-        container: "map",
-        style: "mapbox://styles/mapbox/dark-v11",
-        center: [151.21, -33.87],
-        zoom: 10,
-        maxBounds: bounds,
-        attributionControl: true,
-      });
-      const mapLoaded = new Promise((resolve) =>
+      let MAPBOX_TOKEN = null,
+        map = null;
+      let meMarker = null,
+        destMarker = null,
+        markers = [];
+      const el = (cls, html = "") => {
+        const d = document.createElement("div");
+        d.className = cls;
+        d.innerHTML = html;
+        return d;
+      };
+      // Markers can only be added once the map exists; before that this returns null instead of throwing.
+      function addMarker(opts, lngLat) {
+        return map
+          ? new mapboxgl.Marker(opts).setLngLat(lngLat).addTo(map)
+          : null;
+      }
+      async function initMap() {
+        const cfg = await fetchJSON(`${API_BASE}/api/config`);
+        if (!cfg.mapboxToken)
+          throw new Error("Worker returned no Mapbox token");
+        MAPBOX_TOKEN = cfg.mapboxToken;
+        mapboxgl.accessToken = MAPBOX_TOKEN;
+        const bounds = [
+          [113.3389, -43.6346],
+          [153.5695, -10.6682],
+        ];
+        map = new mapboxgl.Map({
+          container: "map",
+          style: "mapbox://styles/mapbox/dark-v11",
+          center: [151.21, -33.87],
+          zoom: 10,
+          maxBounds: bounds,
+          attributionControl: true,
+        });
         map.on("load", () => {
           map.addSource("route", {
             type: "geojson",
@@ -569,18 +620,64 @@
             layout: { "line-cap": "round", "line-join": "round" },
             paint: { "line-color": "#4da3ff", "line-width": 6 },
           });
-          resolve();
-        }),
-      );
-      let meMarker = null,
-        destMarker = null,
-        markers = [];
-      const el = (cls, html = "") => {
-        const d = document.createElement("div");
-        d.className = cls;
-        d.innerHTML = html;
-        return d;
-      };
+          paintRoute(); // a route computed before the style finished loading
+        });
+        if (S.pos) updateMe(); // anything produced before the map existed
+        if (S.ranked.length) render(true);
+      }
+      // let MAPBOX_TOKEN;
+
+      // fetchJSON(`${API_BASE}/api/config`)
+      //   .then((data) => {
+      //     MAPBOX_TOKEN = data.mapboxToken;
+      //     mapboxgl.accessToken = MAPBOX_TOKEN;
+      //     const bounds = [
+      //       [113.3389, -43.6346],
+      //       [153.5695, -10.6682],
+      //     ];
+      //     const map = new mapboxgl.Map({
+      //       container: "map",
+      //       style: "mapbox://styles/mapbox/dark-v11",
+      //       center: [151.21, -33.87],
+      //       zoom: 10,
+      //       maxBounds: bounds,
+      //       attributionControl: true,
+      //     });
+      //     const mapLoaded = new Promise((resolve) =>
+      //       map.on("load", () => {
+      //         map.addSource("route", {
+      //           type: "geojson",
+      //           data: { type: "FeatureCollection", features: [] },
+      //         });
+      //         map.addLayer({
+      //           id: "route-casing",
+      //           type: "line",
+      //           source: "route",
+      //           layout: { "line-cap": "round", "line-join": "round" },
+      //           paint: { "line-color": "#0b2a4a", "line-width": 10 },
+      //         });
+      //         map.addLayer({
+      //           id: "route-line",
+      //           type: "line",
+      //           source: "route",
+      //           layout: { "line-cap": "round", "line-join": "round" },
+      //           paint: { "line-color": "#4da3ff", "line-width": 6 },
+      //         });
+      //         resolve();
+      //       }),
+      //     );
+      //     let meMarker = null,
+      //       destMarker = null,
+      //       markers = [];
+      //     const el = (cls, html = "") => {
+      //       const d = document.createElement("div");
+      //       d.className = cls;
+      //       d.innerHTML = html;
+      //       return d;
+      //     };
+      //   })
+      //   // if (!MAPBOX_TOKEN) throw new Error('Worker returned no Mapbox token');
+      // .catch ((e) => { status(e.message, true); throw e; })
 
       /* ---------- tabs ---------- */
       FUELS.forEach(([code, label]) => {
@@ -649,21 +746,6 @@
         return 2 * R * Math.asin(Math.sqrt(h));
       }
 
-      /* ---------- data fetchers ---------- */
-      async function fetchJSON(url, opts) {
-        const r = await fetch(url, opts);
-        if (!r.ok) {
-          let detail = "";
-          try {
-            const j = await r.json();
-            detail = j.error || j.message || "";
-          } catch {}
-          throw new Error(
-            `${new URL(url, location.href).host}: HTTP ${r.status}${detail ? " – " + detail : ""}`,
-          );
-        }
-        return r.json();
-      }
       async function getPrices(fuel) {
         if (S.prices[fuel] && Date.now() - S.prices[fuel].at < 5 * 60 * 1000)
           return S.prices[fuel].list;
@@ -864,16 +946,21 @@
       }
 
       /* ---------- rendering ---------- */
-      async function drawRoute(route) {
-        await mapLoaded;
-        map.getSource("route").setData({
-          type: "Feature",
-          geometry: { type: "LineString", coordinates: route.coords },
-        });
+      function paintRoute() {
+        const src = S.route && map && map.getSource("route");
+        if (src)
+          src.setData({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: S.route.coords },
+          });
+      }
+      function drawRoute(route) {
+        paintRoute();
         if (destMarker) destMarker.remove();
-        destMarker = new mapboxgl.Marker({ element: el("dest-dot") })
-          .setLngLat([S.dest.lon, S.dest.lat])
-          .addTo(map);
+        destMarker = addMarker({ element: el("dest-dot") }, [
+          S.dest.lon,
+          S.dest.lat,
+        ]);
       }
       function render(fit = false) {
         markers.forEach((m) => m.remove());
@@ -914,7 +1001,7 @@
           .forEach((b) => (b.onclick = () => goWaze(S.ranked[+b.dataset.i])));
         rail.scrollLeft = 0;
         setSelected(0, true);
-        if (fit && S.route) {
+        if (fit && map && S.route) {
           const bounds = new mapboxgl.LngLatBounds();
           S.route.coords.forEach((c) => bounds.extend(c));
           S.ranked.forEach((s) => bounds.extend([s.lon, s.lat]));
@@ -936,7 +1023,7 @@
         document
           .querySelectorAll(".card")
           .forEach((c, k) => c.classList.toggle("sel", k === i));
-        if (!silent && S.ranked[i])
+        if (!silent && map && S.ranked[i])
           map.easeTo({
             center: [S.ranked[i].lon, S.ranked[i].lat],
             duration: 400,
@@ -1035,20 +1122,28 @@
         recalc();
       }
       let searching = false;
-      $('destInput').addEventListener('keydown', async (e) => {
-        if (e.key !== 'Enter' || searching) return;
-        const q = e.target.value.trim(); if (!q) return;
-        searching = true; status('Searching…');
+      $("destInput").addEventListener("keydown", async (e) => {
+        if (e.key !== "Enter" || searching) return;
+        const q = e.target.value.trim();
+        if (!q) return;
+        searching = true;
+        status("Searching…");
         try {
           const res = await geocode(q);
-          status('');
-          if (!res.length) return status('No match for that destination.', true);
-          setDest(res[0]);                             // best match; the input shows what was resolved
-        } catch (err) { status(err.message, true); }
-        finally { searching = false; }
+          status("");
+          if (!res.length)
+            return status("No match for that destination.", true);
+          setDest(res[0]); // best match; the input shows what was resolved
+        } catch (err) {
+          status(err.message, true);
+        } finally {
+          searching = false;
+        }
       });
-      if (S.dest) $('destInput').value = S.dest.name;
-      getPrices(S.fuel).then(renderBrands).catch((e) => status(e.message, true));
+      if (S.dest) $("destInput").value = S.dest.name;
+      getPrices(S.fuel)
+        .then(renderBrands)
+        .catch((e) => status(e.message, true));
 
       /* ---------- settings ---------- */
       const fields = {
@@ -1072,6 +1167,7 @@
 
       /* ---------- location ---------- */
       function updateMe() {
+        if (!map) return;
         const lngLat = [S.pos.lon, S.pos.lat];
         if (!meMarker)
           meMarker = new mapboxgl.Marker({ element: el("me") })
@@ -1090,8 +1186,11 @@
             if (first) {
               if (S.dest) recalc();
               else {
-                map.jumpTo({ center: [S.pos.lon, S.pos.lat], zoom: 13 });
-                status("Search for a destination to find fuel on your route.");
+                if (map)
+                  map.jumpTo({ center: [S.pos.lon, S.pos.lat], zoom: 13 });
+                status(
+                  "Type a destination and press Enter to find fuel on your route.",
+                );
               }
             } else if (
               S.lastCalcPos &&
