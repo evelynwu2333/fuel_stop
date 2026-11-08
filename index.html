@@ -426,7 +426,7 @@
         <input
           id="destInput"
           type="search"
-          placeholder="Destination, or paste a Waze link"
+          placeholder="Destination"
           enterkeyhint="search"
           autocomplete="off"
         />
@@ -474,7 +474,8 @@
     <script>
       "use strict";
       /* ---------- config ---------- */
-      const MAPBOX_TOKEN = "pk.eyJ1IjoiZXZlbHludy1wZXJzb25hbCIsImEiOiJjbXc2N2cyMGowMDRhMnlwcGU4NXJ5NXdpIn0.C50qk7FEn27zP6L-ArLx_A";
+      const MAPBOX_TOKEN =
+        "pk.eyJ1IjoiZXZlbHludy1wZXJzb25hbCIsImEiOiJjbXc2N2cyMGowMDRhMnlwcGU4NXJ5NXdpIn0.C50qk7FEn27zP6L-ArLx_A";
       // Base URL of the deployed Cloudflare Worker that proxies the NSW Fuel API.
       const API_BASE = "https://fuel_stop.fuelstop.workers.dev";
       // const API_BASE = 'http://localhost:8787';
@@ -495,6 +496,8 @@
       const DEFAULTS = { litres: 40, cons: 8, time: 50, offset: 3 };
 
       /* ---------- state ---------- */
+      ['brands', 'dest'].forEach((k) => localStorage.removeItem(k));
+      sessionStorage.removeItem('resume');
       const S = {
         fuel: localStorage.getItem("fuel") || "U91",
         settings: {
@@ -503,12 +506,14 @@
         },
         pos: null,
         lastCalcPos: null,
-        dest: JSON.parse(localStorage.getItem("dest") || "null"),
+        // dest: JSON.parse(localStorage.getItem("dest") || "null"),
+        dest: null,
         route: null, // {coords:[[lon,lat]], km, min}
         near: [],
         ranked: [],
         sel: -1,
-        brands: new Set(JSON.parse(localStorage.getItem("brands") || "[]")),
+        // brands: new Set(JSON.parse(localStorage.getItem("brands") || "[]")),
+        brands: new Set(),
         prices: {}, // fuel -> {at, list}
         suggestions: [],
         run: 0,
@@ -530,9 +535,9 @@
       /* ---------- map (Mapbox GL JS) ---------- */
       mapboxgl.accessToken = MAPBOX_TOKEN;
       const bounds = [
-        [113.3389, -43.6346], 
-        [153.5695, -10.6682]
-      ]
+        [113.3389, -43.6346],
+        [153.5695, -10.6682],
+      ];
       const map = new mapboxgl.Map({
         container: "map",
         style: "mapbox://styles/mapbox/dark-v11",
@@ -858,12 +863,10 @@
       /* ---------- rendering ---------- */
       async function drawRoute(route) {
         await mapLoaded;
-        map
-          .getSource("route")
-          .setData({
-            type: "Feature",
-            geometry: { type: "LineString", coordinates: route.coords },
-          });
+        map.getSource("route").setData({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: route.coords },
+        });
         if (destMarker) destMarker.remove();
         destMarker = new mapboxgl.Marker({ element: el("dest-dot") })
           .setLngLat([S.dest.lon, S.dest.lat])
@@ -988,39 +991,37 @@
         $("resume").hidden = false;
       });
 
-      /* ---------- destination search (Mapbox Geocoding v6) ----------
-    Waze exposes no API for reading the active route from a web page, so the destination is entered
-    here (search, or paste a waze.com/ul?ll=... share link) and the route is computed with Mapbox Directions. */
-      function parseWazeLink(text) {
-        const m = text.match(
-          /[?&]ll=(-?\d+(?:\.\d+)?)(?:,|%2C)(-?\d+(?:\.\d+)?)/i,
-        );
-        return m ? { lat: +m[1], lon: +m[2], name: "Waze destination" } : null;
-      }
+      /* ---------- destination search (Nominatim / OpenStreetMap) ----------
+        The public Nominatim server allows at most 1 request/second and forbids search-as-you-type,
+        so a search runs only when the user presses Enter. */
       async function geocode(q) {
         const p = new URLSearchParams({
           q,
-          country: "au",
+          format: "jsonv2",
           limit: "5",
-          autocomplete: "true",
-          country: "AU",
-          access_token: MAPBOX_TOKEN,
+          countrycodes: "au",
+          viewbox: "140.6,-37.8,153.9,-27.9",
+          bounded: "1",
+          dedupe: "1",
         });
-        if (S.pos) p.set("proximity", `${S.pos.lon},${S.pos.lat}`);
+        if (S.pos) {
+          // soft bias towards the user: viewbox is left,top,right,bottom; bounded defaults to 0
+          const d = 1.5;
+          p.set(
+            "viewbox",
+            `${S.pos.lon - d},${S.pos.lat + d},${S.pos.lon + d},${S.pos.lat - d}`,
+          );
+        }
         const j = await fetchJSON(
-          `https://api.mapbox.com/search/geocode/v6/forward?${p}`,
+          `https://nominatim.openstreetmap.org/search?${p}`,
         );
-        return (j.features || []).map((f) => {
-          const pr = f.properties;
-          return {
-            lon: f.geometry.coordinates[0],
-            lat: f.geometry.coordinates[1],
-            name: pr.name_preferred || pr.name,
-            full:
-              pr.full_address ||
-              [pr.name, pr.place_formatted].filter(Boolean).join(", "),
-          };
-        });
+        return j.map((r) => ({
+          lat: +r.lat,
+          lon: +r.lon,
+          name:
+            r.name || r.display_name.split(",").slice(0, 2).join(",").trim(),
+          full: r.display_name,
+        }));
       }
       function setDest(d) {
         S.dest = { lat: d.lat, lon: d.lon, name: d.name };
@@ -1030,57 +1031,21 @@
         S.suggestions = [];
         recalc();
       }
-      function showSuggestions(list) {
-        S.suggestions = list;
-        const box = $("suggest");
-        box.innerHTML = "";
-        list.forEach((r) => {
-          const b = document.createElement("button");
-          b.textContent = r.full;
-          b.onclick = () => setDest(r);
-          box.appendChild(b);
-        });
-        box.hidden = list.length === 0;
-      }
-      let searchTimer = 0,
-        searchSeq = 0;
-      $("destInput").addEventListener("input", (e) => {
-        clearTimeout(searchTimer);
-        const q = e.target.value.trim();
-        if (q.length < 3 || parseWazeLink(q)) {
-          $("suggest").hidden = true;
-          return;
-        }
-        searchTimer = setTimeout(async () => {
-          const seq = ++searchSeq;
-          try {
-            const res = await geocode(q);
-            if (seq === searchSeq) showSuggestions(res);
-          } catch (err) {
-            status(err.message, true);
-          }
-        }, 300);
-      });
-      $("destInput").addEventListener("keydown", async (e) => {
-        if (e.key !== "Enter") return;
-        const q = e.target.value.trim();
-        if (!q) return;
-        const w = parseWazeLink(q);
-        if (w) return setDest(w);
-        if (S.suggestions.length) return setDest(S.suggestions[0]);
+      let searching = false;
+      $('destInput').addEventListener('keydown', async (e) => {
+        if (e.key !== 'Enter' || searching) return;
+        const q = e.target.value.trim(); if (!q) return;
+        searching = true; status('Searching…');
         try {
           const res = await geocode(q);
-          if (!res.length)
-            return status("No match for that destination.", true);
-          setDest(res[0]);
-        } catch (err) {
-          status(err.message, true);
-        }
+          status('');
+          if (!res.length) return status('No match for that destination.', true);
+          setDest(res[0]);                             // best match; the input shows what was resolved
+        } catch (err) { status(err.message, true); }
+        finally { searching = false; }
       });
-      if (S.dest) $("destInput").value = S.dest.name;
-      getPrices(S.fuel)
-        .then(renderBrands)
-        .catch((e) => status(e.message, true));
+      if (S.dest) $('destInput').value = S.dest.name;
+      getPrices(S.fuel).then(renderBrands).catch((e) => status(e.message, true));
 
       /* ---------- settings ---------- */
       const fields = {
