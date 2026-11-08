@@ -529,11 +529,16 @@
 
       /* ---------- map (Mapbox GL JS) ---------- */
       mapboxgl.accessToken = MAPBOX_TOKEN;
+      const bounds = [
+        [113.3389, -43.6346], 
+        [153.5695, -10.6682]
+      ]
       const map = new mapboxgl.Map({
         container: "map",
         style: "mapbox://styles/mapbox/dark-v11",
         center: [151.21, -33.87],
         zoom: 10,
+        maxBounds: bounds,
         attributionControl: true,
       });
       const mapLoaded = new Promise((resolve) =>
