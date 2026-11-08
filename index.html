@@ -474,8 +474,6 @@
     <script>
       "use strict";
       /* ---------- config ---------- */
-      const MAPBOX_TOKEN =
-        "pk.eyJ1IjoiZXZlbHludy1wZXJzb25hbCIsImEiOiJjbXc2N2cyMGowMDRhMnlwcGU4NXJ5NXdpIn0.C50qk7FEn27zP6L-ArLx_A";
       // Base URL of the deployed Cloudflare Worker that proxies the NSW Fuel API.
       const API_BASE = "https://fuel_stop.fuelstop.workers.dev";
       // const API_BASE = 'http://localhost:8787';
@@ -533,6 +531,11 @@
         );
 
       /* ---------- map (Mapbox GL JS) ---------- */
+      let MAPBOX_TOKEN;
+      try {
+        MAPBOX_TOKEN = (await fetchJSON(`${API_BASE}/api/config`)).mapboxToken;
+        if (!MAPBOX_TOKEN) throw new Error('Worker returned no Mapbox token');
+      } catch (e) { status(e.message, true); throw e; }
       mapboxgl.accessToken = MAPBOX_TOKEN;
       const bounds = [
         [113.3389, -43.6346],
