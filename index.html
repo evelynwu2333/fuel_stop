@@ -401,10 +401,32 @@
         font: 700 17px var(--font);
         cursor: pointer;
       }
+
+      #dbg {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        max-height: 38vh;
+        margin: 0;
+        padding: 6px 8px;
+        overflow: auto;
+        z-index: 9999;
+        background: rgba(0, 0, 0, 0.88);
+        color: #9fe870;
+        font:
+          11px/1.35 ui-monospace,
+          Menlo,
+          monospace;
+        white-space: pre-wrap;
+        pointer-events: none;
+      }
+
       :focus-visible {
         outline: 3px solid #fff;
         outline-offset: 2px;
       }
+
       @media (prefers-reduced-motion: reduce) {
         * {
           scroll-behavior: auto !important;
@@ -475,15 +497,15 @@
       "use strict";
       /* ---------- config ---------- */
       // Base URL of the deployed Cloudflare Worker that proxies the NSW Fuel API.
-      const API_BASE = "https://fuel_stop.fuelstop.workers.dev";
-      // const API_BASE = 'http://localhost:8787';
+      // const API_BASE = "https://fuel_stop.fuelstop.workers.dev";
+      const API_BASE = "http://localhost:8787";
 
       /* ---------- constants ---------- */
       const FUELS = [
-        ["U91", "91"],
+        ["U91", "U91"],
         ["E10", "E10"],
-        ["P95", "95"],
-        ["P98", "98"],
+        ["P95", "P95"],
+        ["P98", "P98"],
         ["DL", "Diesel"],
         ["PDL", "Prem. diesel"],
         ["LPG", "LPG"],
@@ -584,10 +606,20 @@
           : null;
       }
       async function initMap() {
-        const cfg = await fetchJSON(`${API_BASE}/api/config`);
+        let cfg;
+        try {
+          cfg = await fetchJSON(`${API_BASE}/api/config`);
+        } catch (e) {
+          throw new Error(
+            `Could not load the Mapbox token from the Worker (${e.message})`,
+          );
+        }
         if (!cfg.mapboxToken)
-          throw new Error("Worker returned no Mapbox token");
+          throw new Error(
+            "The Worker answered /api/config but returned no mapboxToken",
+          );
         MAPBOX_TOKEN = cfg.mapboxToken;
+        dbg("mapbox token loaded", MAPBOX_TOKEN.slice(0, 6) + "…");
         mapboxgl.accessToken = MAPBOX_TOKEN;
         const bounds = [
           [113.3389, -43.6346],
@@ -832,6 +864,7 @@
           return;
         }
         const run = ++S.run;
+        dbg("recalc", { pos: S.pos, dest: S.dest, fuel: S.fuel });
         status("Finding stations on your route…");
         try {
           const [route, prices] = await Promise.all([
@@ -845,16 +878,27 @@
           const proj = makeProjector(S.pos.lat);
           const path = route.coords.map(proj);
           const maxOff = S.settings.offset;
-          const lons = route.coords.map((c) => c[0]),
-            lats = route.coords.map((c) => c[1]);
+          let minLon = Infinity,
+            maxLon = -Infinity,
+            minLat = Infinity,
+            maxLat = -Infinity;
+          for (const [lo, la] of route.coords) {
+            if (lo < minLon) minLon = lo;
+            if (lo > maxLon) maxLon = lo;
+            if (la < minLat) minLat = la;
+            if (la > maxLat) maxLat = la;
+          }
           const padLat = maxOff / 110.574,
             padLon = maxOff / (111.32 * Math.cos((S.pos.lat * Math.PI) / 180));
-          const [minLon, maxLon, minLat, maxLat] = [
-            Math.min(...lons) - padLon,
-            Math.max(...lons) + padLon,
-            Math.min(...lats) - padLat,
-            Math.max(...lats) + padLat,
-          ];
+          minLon -= padLon;
+          maxLon += padLon;
+          minLat -= padLat;
+          maxLat += padLat;
+          dbg("route", {
+            points: route.coords.length,
+            km: +route.km.toFixed(1),
+            prices: prices.length,
+          });
 
           const near = [];
           for (const s of prices) {
@@ -870,7 +914,8 @@
           }
           near.sort((a, b) => a.offKm - b.offKm);
           S.near = near;
-          await drawRoute(route);
+          dbg("near route", near.length);
+          drawRoute(route);
           await rank(run, true);
         } catch (e) {
           if (run !== S.run) return;
@@ -885,6 +930,7 @@
             ? S.near.filter((s) => S.brands.has(s.brand))
             : S.near;
           const candidates = pool.slice(0, MAX_CANDIDATES); // closest to the route first
+          dbg("rank", { pool: pool.length, candidates: candidates.length });
           if (!candidates.length) {
             S.ranked = [];
             render();
@@ -900,6 +946,7 @@
           const withDetour = await getDetours(S.pos, S.dest, candidates);
           if (run !== S.run) return;
           S.ranked = withDetour.map(score).sort((a, b) => a.total - b.total);
+          dbg("ranked", S.ranked.length);
           S.sel = 0;
           status("");
           render(fit);
@@ -1001,7 +1048,7 @@
           .forEach((b) => (b.onclick = () => goWaze(S.ranked[+b.dataset.i])));
         rail.scrollLeft = 0;
         setSelected(0, true);
-        if (fit && map && S.route) {
+        if (fit && S.route) {
           const bounds = new mapboxgl.LngLatBounds();
           S.route.coords.forEach((c) => bounds.extend(c));
           S.ranked.forEach((s) => bounds.extend([s.lon, s.lat]));
@@ -1023,7 +1070,7 @@
         document
           .querySelectorAll(".card")
           .forEach((c, k) => c.classList.toggle("sel", k === i));
-        if (!silent && map && S.ranked[i])
+        if (!silent && S.ranked[i])
           map.easeTo({
             center: [S.ranked[i].lon, S.ranked[i].lat],
             duration: 400,
@@ -1169,45 +1216,73 @@
       function updateMe() {
         if (!map) return;
         const lngLat = [S.pos.lon, S.pos.lat];
-        if (!meMarker)
-          meMarker = new mapboxgl.Marker({ element: el("me") })
-            .setLngLat(lngLat)
-            .addTo(map);
+        if (!meMarker) meMarker = addMarker({ element: el("me") }, lngLat);
         else meMarker.setLngLat(lngLat);
       }
-      if (!("geolocation" in navigator))
-        status("This browser has no location support.", true);
-      else
-        navigator.geolocation.watchPosition(
-          (p) => {
-            const first = !S.pos;
-            S.pos = { lat: p.coords.latitude, lon: p.coords.longitude };
-            updateMe();
-            if (first) {
-              if (S.dest) recalc();
-              else {
-                if (map)
-                  map.jumpTo({ center: [S.pos.lon, S.pos.lat], zoom: 13 });
-                status(
-                  "Type a destination and press Enter to find fuel on your route.",
-                );
-              }
-            } else if (
-              S.lastCalcPos &&
-              S.dest &&
-              haversineKm(S.pos, S.lastCalcPos) > RECALC_KM
-            )
-              recalc();
-          },
-          (e) =>
+      function onPos(p) {
+        dbg("position", {
+          lat: +p.coords.latitude.toFixed(4),
+          lon: +p.coords.longitude.toFixed(4),
+          acc: Math.round(p.coords.accuracy),
+        });
+        const first = !S.pos;
+        S.geoError = null;
+        S.pos = { lat: p.coords.latitude, lon: p.coords.longitude };
+        updateMe();
+        if (first) {
+          if (S.dest) recalc();
+          else {
+            if (map) map.jumpTo({ center: [S.pos.lon, S.pos.lat], zoom: 13 });
             status(
-              e.code === 1
-                ? "Allow location access to find stations on your route."
-                : "Could not get your location.",
-              true,
-            ),
-          { enableHighAccuracy: true, maximumAge: 10_000 },
-        );
+              "Type a destination and press Enter to find fuel on your route.",
+            );
+          }
+        } else if (
+          S.lastCalcPos &&
+          S.dest &&
+          haversineKm(S.pos, S.lastCalcPos) > RECALC_KM
+        )
+          recalc();
+      }
+      function onGeoError(e) {
+        dbg("geo error", e.code, e.message);
+        if (S.pos) return; // keep working with the last good position
+        S.geoError =
+          e.code === 1
+            ? "Allow location access to find stations on your route."
+            : "Could not get your location.";
+        status(S.geoError, true);
+      }
+      function startLocation() {
+        if (!window.isSecureContext) {
+          S.geoError =
+            "Location needs HTTPS. Open the https:// address, not http:// or an IP address.";
+          status(S.geoError, true);
+        } else if (!("geolocation" in navigator)) {
+          S.geoError = "This browser has no location support.";
+          status(S.geoError, true);
+        } else {
+          // Mobile GPS can take a long time to lock, so grab a fast coarse fix first, then refine with a high-accuracy watch.
+          navigator.geolocation.getCurrentPosition(onPos, onGeoError, {
+            enableHighAccuracy: false,
+            timeout: 15_000,
+            maximumAge: 60_000,
+          });
+          navigator.geolocation.watchPosition(onPos, onGeoError, {
+            enableHighAccuracy: true,
+            maximumAge: 10_000,
+          });
+        }
+      }
+
+      /* ---------- boot ----------
+        Location handlers touch the map, so they start only after the map exists. */
+      initMap()
+        .then(startLocation)
+        .catch((e) => {
+          dbg("init failed", e.message);
+          status(e.message, true);
+        });
     </script>
   </body>
 </html>

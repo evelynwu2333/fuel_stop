@@ -22,8 +22,7 @@ async function getToken(env) {
   const r = await fetch(endpoint, {
     method: "GET",
     headers: {
-      authorization:
-        "Basic " + bytes.toBase64(),
+      authorization: "Basic " + bytes.toBase64(),
     },
   });
   if (!r.ok) {
@@ -124,18 +123,24 @@ export default {
       });
 
     const url = new URL(req.url);
-    if (req.method === 'GET' && url.pathname === '/api/config') {
-      const tok = env.MAPBOX_TOKEN || '';
+    if (req.method === "GET" && url.pathname === "/api/config") {
+      const tok = env.MAPBOX_TOKEN || "";
       // Refuse to serve anything but a public token: this endpoint hands the value to every visitor.
-      if (!tok.startsWith('pk.')) return json({ error: 'MAPBOX_TOKEN not available' }, 500);
-      return json({ mapboxToken: tok }, 200, { 'Cache-Control': 'private, max-age=300' });
+      if (!tok.startsWith("pk."))
+        return json({ error: "MAPBOX_TOKEN not available" }, 500);
+      return json({ mapboxToken: tok }, 200, {
+        "Cache-Control": "private, max-age=300",
+      });
     }
-    if (req.method !== 'GET' || url.pathname !== '/api/prices') return json({ error: 'not found' }, 404);
-    const fuel = url.searchParams.get('fuel');
-    if (!FUELS.has(fuel)) return json({ error: 'bad fuel type' }, 400);
+    if (req.method !== "GET" || url.pathname !== "/api/prices")
+      return json({ error: "not found" }, 404);
+    const fuel = url.searchParams.get("fuel");
+    if (!FUELS.has(fuel)) return json({ error: "bad fuel type" }, 400);
     try {
       const raw = await getAllPrices(env, ctx);
-      return json(pricesForFuel(raw, fuel), 200, { 'Cache-Control': 'public, max-age=120' });
+      return json(pricesForFuel(raw, fuel), 200, {
+        "Cache-Control": "public, max-age=120",
+      });
     } catch (e) {
       console.error(e);
       return json({ error: String(e.message || e) }, 502);
